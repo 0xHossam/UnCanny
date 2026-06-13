@@ -124,7 +124,8 @@ there is a second side to the same bug that is more direct than coercion. if `In
 
 so i got hyped trying to proof for this issue and wrote the poc in `lpe/`. the important thing is not another package registration trick, it is the same registered loose package being reused as the plugin package. the harness asks the low-priv user's package family name with `Get-AppxPackage`, passes that PFN as `FulfillmentPluginId`, sets `SkipCatalogLookup=true`, and includes `SerializedFulfillmentData`. that last field matters because `InstallQueue2::CreateWork` rejects the request with `0x80070057` if catalog lookup is skipped without fulfillment data.
 
-![dllmain as system](pics/lpe-system.png)
+<img width="1176" height="726" alt="image" src="https://github.com/user-attachments/assets/2e13c827-eb1f-479c-80b3-a0277f0e3d73" />
+
 
 it's very important to note about something took long time in troubleshooting which is that **impacket cannot serve a loadable image.** it answers the reads well enough for the machine account to authenticate, so the coercion path is perfectly happy, but `LoadLibraryW` against an impacket share comes back null with `ERROR_INVALID_HANDLE` and `DllMain` never runs. serve the exact same files with a real SMB server (Samba) and the load succeeds. Samba reports `NTFS` by default so the loose registration still goes through. so the rule is simple: impacket when you only want the hash, Samba when you want the dll to actually execute as SYSTEM!
 
