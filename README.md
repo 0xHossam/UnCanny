@@ -4,6 +4,8 @@ Hi! it's been almost a year since i disappeared from the public red team communi
 
 My initial focus was discovering new RPC attack surfaces and ended up finding plenty of interesting stuff along the way maybe will post about them later, later i came across the news that microsoft finally added RPC monitoring support (https://techcommunity.microsoft.com/blog/microsoftdefenderatpblog/microsoft-defender-now-monitors-rpc-activity/4523368). so i wanted to continue in diffrent path. it has been a long fight between RPC and the security community. we've already seen plenty of research in this area starting with PetitPotam, which microsoft says is patched, but the story is a bit more complicated than that as at the end of the day, a lot of these coercion vectors are really just features being used in ways they weren't originally intended to be used.
 
+Because of the limitation that comes with it, i decided to publish my notes anyway. it might still be helpful for someone digging into the same area, even if it is not something i would consider reliable or useful for real red team ops.
+
 ---
 
 shortly this primitive is:
