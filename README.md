@@ -1,12 +1,10 @@
 # UNCanny Coerce
 
-Hi! it's been almost a year since i disappeared from the public red team community for several personal reasons. anyways, the main inspiration behind this research is pretty simple. i wanted to bring something different to my GitHub for a change, and from the technical side i wanted to find my own coercion technique.
+Hi! it's been almost a year since i disappeared from the public red team community for several personal reasons.
 
-my initial focus was discovering new RPC attack surfaces, and i ended up finding plenty of interesting stuff along the way that i might post about later. but after seeing microsoft finally adding RPC activity monitoring (https://techcommunity.microsoft.com/blog/microsoftdefenderatpblog/microsoft-defender-now-monitors-rpc-activity/4523368), i decided to continue in a different direction.
+the idea behind this research was simple as i wanted to find my own coercion technique. i started by looking for new RPC attack surfaces, but after microsoft added RPC activity monitoring (https://techcommunity.microsoft.com/blog/microsoftdefenderatpblog/microsoft-defender-now-monitors-rpc-activity/4523368), i decided to take a different path.
 
-it has been a long fight between RPC and the security community. we've already seen plenty of research in this area starting with PetitPotam, which microsoft says is patched, but the story is a bit more complicated than that. at the end of the day, a lot of these coercion vectors are really just features being used in ways they weren't originally intended to be used.
-
-because of the limitation that comes with this technique, i decided to publish my notes anyway. it might still be helpful for someone digging into the same area, even if it is not something i would consider reliable or useful for real red team ops.
+UNCanny is the result of that rabbit hole. it is not something i would consider reliable for real red team ops because of its limitation, but i still think the notes are worth publishing for anyone digging into the same area.
 
 ---
 
