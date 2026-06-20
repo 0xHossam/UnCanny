@@ -1,8 +1,6 @@
 # UNCanny Coerce
 
-Hi! it's been almost a year since i disappeared from the public red team community for several personal reasons.
-
-the idea behind this research was simple as i wanted to find my own coercion technique. i started by looking for new RPC attack surfaces, but after microsoft added RPC activity monitoring (https://techcommunity.microsoft.com/blog/microsoftdefenderatpblog/microsoft-defender-now-monitors-rpc-activity/4523368), i decided to take a different path.
+The idea behind this research was simple as i wanted to find my own coercion technique. i started by looking for new RPC attack surfaces, but after microsoft added RPC activity monitoring (https://techcommunity.microsoft.com/blog/microsoftdefenderatpblog/microsoft-defender-now-monitors-rpc-activity/4523368), i decided to take a different path.
 
 UNCanny is the result of that rabbit hole. it is not something i would consider reliable for real red team ops because of its limitation, but i still think the notes are worth publishing for anyone digging into the same area.
 
